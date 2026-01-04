@@ -1,0 +1,8 @@
+setup:
+  - npm install
+
+compile:
+  - npx hardhat compile
+
+test:
+  - npx hardhat test
