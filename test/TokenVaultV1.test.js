@@ -105,4 +105,51 @@ describe("TokenVaultV1", function () {
     ).to.be.reverted;
   });
 
+  it("should revert deposits with zero amount", async function () {
+    await expect(
+      vault.connect(user).deposit(0)
+    ).to.be.revertedWith("Amount must be > 0");
+  });
+
+  it("should revert withdrawals with zero amount", async function () {
+    await expect(
+      vault.connect(user).withdraw(0)
+    ).to.be.revertedWith("Amount must be > 0");
+  });
+
+  it("should return correct implementation version", async function () {
+    expect(await vault.getImplementationVersion()).to.equal("V1");
+  });
+
+  it("should return zero balance for user who hasn't deposited", async function () {
+    const [, , stranger] = await ethers.getSigners();
+    expect(await vault.balanceOf(stranger.address)).to.equal(0);
+  });
+
+  it("should revert initialization with invalid parameters", async function () {
+    const TokenVaultV1 = await ethers.getContractFactory("TokenVaultV1");
+    await expect(
+      upgrades.deployProxy(
+        TokenVaultV1,
+        [ethers.ZeroAddress, owner.address, 500],
+        { kind: "uups" }
+      )
+    ).to.be.revertedWith("Invalid token address");
+
+    await expect(
+      upgrades.deployProxy(
+        TokenVaultV1,
+        [token.target, ethers.ZeroAddress, 500],
+        { kind: "uups" }
+      )
+    ).to.be.revertedWith("Invalid admin address");
+
+    await expect(
+      upgrades.deployProxy(
+        TokenVaultV1,
+        [token.target, owner.address, 10001],
+        { kind: "uups" }
+      )
+    ).to.be.revertedWith("Fee exceeds 100%");
+  });
 });

@@ -101,7 +101,7 @@ describe("Upgrade V2 to V3", function () {
     ).to.be.reverted;
   });
 
-  it("should allow emergency withdrawals", async function () {
+    it("should allow emergency withdrawals", async function () {
     const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
     const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
 
@@ -111,5 +111,103 @@ describe("Upgrade V2 to V3", function () {
 
     const balanceAfter = await token.balanceOf(user.address);
     expect(balanceAfter).to.be.gt(balanceBefore);
+  });
+
+  it("should successfully execute withdrawal after delay has elapsed", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
+
+    const delay = 3600;
+    await vaultV3.connect(owner).setWithdrawalDelay(delay);
+
+    const withdrawAmount = ethers.parseEther("40");
+    await vaultV3.connect(user).requestWithdrawal(withdrawAmount);
+
+    // Fast-forward time past the withdrawal delay
+    await ethers.provider.send("evm_increaseTime", [delay + 1]);
+    await ethers.provider.send("evm_mine");
+
+    const tokenBalanceBefore = await token.balanceOf(user.address);
+    const vaultBalanceBefore = await vaultV3.balanceOf(user.address);
+
+    await expect(vaultV3.connect(user).executeWithdrawal())
+      .to.emit(vaultV3, "WithdrawalExecuted")
+      .withArgs(user.address, withdrawAmount);
+
+    const tokenBalanceAfter = await token.balanceOf(user.address);
+    const vaultBalanceAfter = await vaultV3.balanceOf(user.address);
+
+    expect(tokenBalanceAfter).to.equal(tokenBalanceBefore + withdrawAmount);
+    expect(vaultBalanceAfter).to.equal(vaultBalanceBefore - withdrawAmount);
+
+    // Request should be cleared
+    const req = await vaultV3.getWithdrawalRequest(user.address);
+    expect(req.amount).to.equal(0);
+  });
+
+  it("should allow a new withdrawal request to cancel the previous request", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
+
+    await vaultV3.connect(owner).setWithdrawalDelay(3600);
+
+    // First request: 30 tokens
+    await vaultV3.connect(user).requestWithdrawal(ethers.parseEther("30"));
+    let req = await vaultV3.getWithdrawalRequest(user.address);
+    expect(req.amount).to.equal(ethers.parseEther("30"));
+
+    // Second request: 50 tokens (overwrites/cancels first request)
+    await vaultV3.connect(user).requestWithdrawal(ethers.parseEther("50"));
+    req = await vaultV3.getWithdrawalRequest(user.address);
+    expect(req.amount).to.equal(ethers.parseEther("50"));
+  });
+
+  it("should revert execution when there is no pending request", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
+
+    await expect(
+      vaultV3.connect(user).executeWithdrawal()
+    ).to.be.revertedWith("No pending request");
+  });
+
+  it("should revert withdrawal request for zero amount or exceeding balance", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
+
+    await expect(
+      vaultV3.connect(user).requestWithdrawal(0)
+    ).to.be.revertedWith("Invalid amount");
+
+    await expect(
+      vaultV3.connect(user).requestWithdrawal(ethers.parseEther("1000"))
+    ).to.be.revertedWith("Insufficient balance");
+  });
+
+  it("should prevent non-admin from setting withdrawal delay", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
+
+    await expect(
+      vaultV3.connect(user).setWithdrawalDelay(100)
+    ).to.be.reverted;
+  });
+
+  it("should revert emergency withdraw if user has no balance", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3);
+
+    const [, , stranger] = await ethers.getSigners();
+    await expect(
+      vaultV3.connect(stranger).emergencyWithdraw()
+    ).to.be.revertedWith("Nothing to withdraw");
+  });
+
+  it("should support upgrading and calling initializeV3 as a reinitializer", async function () {
+    const TokenVaultV3 = await ethers.getContractFactory("TokenVaultV3");
+    const vaultV3 = await upgrades.upgradeProxy(vault.target, TokenVaultV3, {
+      call: { fn: "initializeV3", args: [7200] }
+    });
+    expect(await vaultV3.getWithdrawalDelay()).to.equal(7200);
   });
 });
